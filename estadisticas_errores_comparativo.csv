@@ -1,0 +1,9 @@
+Modelo,Clase,Muestras,Aciertos,Errores,Tasa_Error_%
+XGBoost,Healthy,400,397,3,0.75
+XGBoost,Generalized,400,388,12,3.0
+XGBoost,Focal,400,380,20,5.0
+XGBoost,Seizure,400,376,24,6.0
+Red Neuronal MLP,Healthy,400,398,2,0.5
+Red Neuronal MLP,Generalized,400,396,4,1.0
+Red Neuronal MLP,Focal,400,391,9,2.25
+Red Neuronal MLP,Seizure,400,399,1,0.25

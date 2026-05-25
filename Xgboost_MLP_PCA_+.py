@@ -1,14 +1,9 @@
 """
-RFECV + XGBoost + modelo neuronal seleccionable.
+RFECV independiente para XGBoost y MLP.
 
 Uso:
-  .venv\Scripts\python.exe RFECV.py mlp
-  .venv\Scripts\python.exe RFECV.py cnn
-
-Modo por defecto: mlp
+    .venv\Scripts\python.exe Xgboost_MLP_PCA_+.py
 """
-
-from __future__ import annotations
 
 import sys
 import warnings
@@ -22,7 +17,15 @@ import pandas as pd
 import seaborn as sns
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import RFECV
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    precision_score,
+    recall_score,
+    f1_score,
+)
+from sklearn.metrics import precision_recall_fscore_support
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
@@ -94,6 +97,70 @@ def plot_rfecv(rfecv: RFECV, output_path: str) -> None:
     print(f"✓ Gráfico guardado: {output_path}")
 
 
+def generate_error_statistics(y_test: np.ndarray, y_pred: np.ndarray, model_name: str, output_csv: str) -> pd.DataFrame:
+    """
+    Genera estadísticas detalladas de errores por modelo y por clase.
+    Devuelve un DataFrame con las estadísticas y lo guarda en CSV.
+    """
+    print("\n" + "=" * 70)
+    print(f" ESTADÍSTICAS DE ERRORES - {model_name}")
+    print("=" * 70)
+    
+    # Total de aciertos y errores
+    aciertos = np.sum(y_test == y_pred)
+    errores = np.sum(y_test != y_pred)
+    total = len(y_test)
+    accuracy = aciertos / total * 100
+    
+    print(f"\n✓ Aciertos: {aciertos}/{total} ({accuracy:.2f}%)")
+    print(f"✗ Errores:  {errores}/{total} ({100-accuracy:.2f}%)")
+    
+    # Estadísticas por clase
+    print(f"\n{'-' * 70}")
+    print(f"{'Clase':<15} {'Muestras':<12} {'Aciertos':<12} {'Errores':<12} {'Tasa Error':<15}")
+    print(f"{'-' * 70}")
+    
+    error_stats = []
+    
+    for clase_idx, clase_name in enumerate(TARGET_NAMES):
+        mask_clase = y_test == clase_idx
+        muestras_clase = np.sum(mask_clase)
+        aciertos_clase = np.sum((y_test == y_pred) & mask_clase)
+        errores_clase = muestras_clase - aciertos_clase
+        tasa_error = errores_clase / muestras_clase * 100 if muestras_clase > 0 else 0
+        
+        print(f"{clase_name:<15} {muestras_clase:<12} {aciertos_clase:<12} {errores_clase:<12} {tasa_error:.2f}%")
+        
+        # Analizar de qué forma se equivocó
+        if errores_clase > 0:
+            print(f"  └─ Errores de '{clase_name}':")
+            mask_errores = (y_test == clase_idx) & (y_test != y_pred)
+            predicciones_erroneas = y_pred[mask_errores]
+            
+            for pred_clase in np.unique(predicciones_erroneas):
+                count = np.sum(predicciones_erroneas == pred_clase)
+                porcentaje = count / errores_clase * 100
+                print(f"     • Confundido con '{TARGET_NAMES[pred_clase]}': {count} ({porcentaje:.1f}%)")
+        
+        error_stats.append({
+            'Modelo': model_name,
+            'Clase': clase_name,
+            'Muestras': muestras_clase,
+            'Aciertos': aciertos_clase,
+            'Errores': errores_clase,
+            'Tasa_Error_%': tasa_error
+        })
+    
+    print(f"{'-' * 70}\n")
+    
+    # Guardar en CSV
+    df_stats = pd.DataFrame(error_stats)
+    df_stats.to_csv(output_csv, index=False)
+    print(f"✓ Estadísticas guardadas en: {output_csv}\n")
+    
+    return df_stats
+
+
 def run_rfecv_xgb(X_train_scaled: np.ndarray, y_train: np.ndarray, X_test_scaled: np.ndarray, y_test: np.ndarray, output_prefix: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     print("=" * 70)
     print("PASO 3: RFECV - SELECCIONAR CARACTERÍSTICAS CON XGBOOST")
@@ -151,7 +218,87 @@ def run_rfecv_xgb(X_train_scaled: np.ndarray, y_train: np.ndarray, X_test_scaled
     print("Classification Report (XGBoost):")
     print(classification_report(y_test, y_pred_xgb, target_names=TARGET_NAMES, zero_division=0))
 
+    # Métricas agregadas (macro y weighted)
+    precision_macro_xgb = precision_score(y_test, y_pred_xgb, average="macro", zero_division=0)
+    recall_macro_xgb = recall_score(y_test, y_pred_xgb, average="macro", zero_division=0)
+    f1_macro_xgb = f1_score(y_test, y_pred_xgb, average="macro", zero_division=0)
+
+    precision_weighted_xgb = precision_score(y_test, y_pred_xgb, average="weighted", zero_division=0)
+    recall_weighted_xgb = recall_score(y_test, y_pred_xgb, average="weighted", zero_division=0)
+    f1_weighted_xgb = f1_score(y_test, y_pred_xgb, average="weighted", zero_division=0)
+
+    print("Métricas agregadas (XGBoost):")
+    print(f" Precision (macro): {precision_macro_xgb:.4f} | Recall (macro): {recall_macro_xgb:.4f} | F1 (macro): {f1_macro_xgb:.4f}")
+    print(f" Precision (weighted): {precision_weighted_xgb:.4f} | Recall (weighted): {recall_weighted_xgb:.4f} | F1 (weighted): {f1_weighted_xgb:.4f}\n")
+
+    # Métricas por clase y promedio 'micro'
+    labels = np.arange(len(TARGET_NAMES))
+    prec_per_class, rec_per_class, f1_per_class, support_per_class = precision_recall_fscore_support(
+        y_test, y_pred_xgb, labels=labels, zero_division=0
+    )
+    df_per_class_xgb = pd.DataFrame({
+        'Modelo': ['XGBoost'] * len(TARGET_NAMES),
+        'Clase': TARGET_NAMES,
+        'Precision': prec_per_class,
+        'Recall': rec_per_class,
+        'F1': f1_per_class,
+        'Soporte': support_per_class,
+    })
+    df_per_class_xgb.to_csv('metricas_por_clase_xgboost.csv', index=False)
+    print('✓ Métricas por clase guardadas en: metricas_por_clase_xgboost.csv')
+
+    precision_micro_xgb = precision_score(y_test, y_pred_xgb, average='micro', zero_division=0)
+    recall_micro_xgb = recall_score(y_test, y_pred_xgb, average='micro', zero_division=0)
+    f1_micro_xgb = f1_score(y_test, y_pred_xgb, average='micro', zero_division=0)
+
     return selected_mask, X_train_selected, X_test_selected, accuracy_xgb, y_pred_xgb
+
+
+def run_rfecv_mlp(X_train_scaled: np.ndarray, y_train: np.ndarray, X_test_scaled: np.ndarray, y_test: np.ndarray, output_prefix: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    print("=" * 70)
+    print("PASO 4: RFECV - SELECCIONAR CARACTERÍSTICAS CON MLP")
+    print("=" * 70)
+    print("Ejecutando RFECV para MLP (puede tomar varios minutos)...\n")
+
+    def mlp_importance_getter(estimator: MLPClassifier) -> np.ndarray:
+        return np.mean(np.abs(estimator.coefs_[0]), axis=1)
+
+    estimator = MLPClassifier(
+        hidden_layer_sizes=(128, 64),
+        activation="relu",
+        solver="adam",
+        alpha=0.0001,
+        batch_size=32,
+        learning_rate_init=0.001,
+        max_iter=300,
+        random_state=42,
+        verbose=False,
+    )
+
+    rfecv = RFECV(
+        estimator=estimator,
+        step=1,
+        cv=StratifiedKFold(5, shuffle=True, random_state=42),
+        scoring="accuracy",
+        n_jobs=-1,
+        verbose=1,
+        importance_getter=mlp_importance_getter,
+    )
+    rfecv.fit(X_train_scaled, y_train)
+
+    selected_mask = rfecv.support_
+    selected_features = [FEATURE_NAMES[i] for i, selected in enumerate(selected_mask) if selected]
+
+    print(f"\n✓ Características seleccionadas para MLP: {len(selected_features)}/{len(FEATURE_NAMES)}")
+    print(f"  Características: {selected_features}")
+    print(f"  Ranking RFECV: {rfecv.ranking_}\n")
+
+    plot_rfecv(rfecv, f"rfecv_selection_mlp_{output_prefix}.png")
+
+    X_train_selected = X_train_scaled[:, selected_mask]
+    X_test_selected = X_test_scaled[:, selected_mask]
+
+    return selected_mask, X_train_selected, X_test_selected
 
 
 def train_mlp(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected: np.ndarray, y_test: np.ndarray, xgb_accuracy: float, y_pred_xgb: np.ndarray) -> None:
@@ -179,6 +326,39 @@ def train_mlp(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected
     print("Classification Report (Red Neuronal MLP):")
     print(classification_report(y_test, y_pred_mlp, target_names=TARGET_NAMES, zero_division=0))
 
+    # Métricas agregadas para MLP
+    precision_macro_mlp = precision_score(y_test, y_pred_mlp, average="macro", zero_division=0)
+    recall_macro_mlp = recall_score(y_test, y_pred_mlp, average="macro", zero_division=0)
+    f1_macro_mlp = f1_score(y_test, y_pred_mlp, average="macro", zero_division=0)
+
+    precision_weighted_mlp = precision_score(y_test, y_pred_mlp, average="weighted", zero_division=0)
+    recall_weighted_mlp = recall_score(y_test, y_pred_mlp, average="weighted", zero_division=0)
+    f1_weighted_mlp = f1_score(y_test, y_pred_mlp, average="weighted", zero_division=0)
+
+    print("Métricas agregadas (MLP):")
+    print(f" Precision (macro): {precision_macro_mlp:.4f} | Recall (macro): {recall_macro_mlp:.4f} | F1 (macro): {f1_macro_mlp:.4f}")
+    print(f" Precision (weighted): {precision_weighted_mlp:.4f} | Recall (weighted): {recall_weighted_mlp:.4f} | F1 (weighted): {f1_weighted_mlp:.4f}\n")
+
+    # Métricas por clase y promedio 'micro' para MLP
+    labels = np.arange(len(TARGET_NAMES))
+    prec_per_class_mlp, rec_per_class_mlp, f1_per_class_mlp, support_per_class_mlp = precision_recall_fscore_support(
+        y_test, y_pred_mlp, labels=labels, zero_division=0
+    )
+    df_per_class_mlp = pd.DataFrame({
+        'Modelo': ['Red Neuronal MLP'] * len(TARGET_NAMES),
+        'Clase': TARGET_NAMES,
+        'Precision': prec_per_class_mlp,
+        'Recall': rec_per_class_mlp,
+        'F1': f1_per_class_mlp,
+        'Soporte': support_per_class_mlp,
+    })
+    df_per_class_mlp.to_csv('metricas_por_clase_mlp.csv', index=False)
+    print('✓ Métricas por clase guardadas en: metricas_por_clase_mlp.csv')
+
+    precision_micro_mlp = precision_score(y_test, y_pred_mlp, average='micro', zero_division=0)
+    recall_micro_mlp = recall_score(y_test, y_pred_mlp, average='micro', zero_division=0)
+    f1_micro_mlp = f1_score(y_test, y_pred_mlp, average='micro', zero_division=0)
+
     print("=" * 70)
     print("PASO 6: COMPARACIÓN DE MODELOS")
     print("=" * 70)
@@ -187,6 +367,60 @@ def train_mlp(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected
     for model_name, accuracy in sorted({"XGBoost": xgb_accuracy, "Red Neuronal MLP": accuracy_mlp}.items(), key=lambda item: item[1], reverse=True):
         diff = f"{((accuracy / xgb_accuracy) - 1) * 100:+.2f}%" if model_name != "XGBoost" else "+0.00%"
         print(f"{model_name:<25} {accuracy:<15.4f} {diff:<20}")
+
+    # Generar estadísticas de errores para ambos modelos
+    df_stats_xgb = generate_error_statistics(y_test, y_pred_xgb, "XGBoost", "estadisticas_errores_xgboost.csv")
+    df_stats_mlp = generate_error_statistics(y_test, y_pred_mlp, "Red Neuronal MLP", "estadisticas_errores_mlp.csv")
+    
+    # Combinar estadísticas de ambos modelos
+    df_stats_combinado = pd.concat([df_stats_xgb, df_stats_mlp], ignore_index=True)
+    df_stats_combinado.to_csv("estadisticas_errores_comparativo.csv", index=False)
+    print(f"✓ Estadísticas comparativas guardadas en: estadisticas_errores_comparativo.csv\n")
+
+    # Guardar resumen de métricas de ambos modelos
+    # Recalcular métricas agregadas de XGBoost (si no fueron retornadas)
+    precision_macro_xgb = precision_score(y_test, y_pred_xgb, average="macro", zero_division=0)
+    recall_macro_xgb = recall_score(y_test, y_pred_xgb, average="macro", zero_division=0)
+    f1_macro_xgb = f1_score(y_test, y_pred_xgb, average="macro", zero_division=0)
+
+    precision_weighted_xgb = precision_score(y_test, y_pred_xgb, average="weighted", zero_division=0)
+    recall_weighted_xgb = recall_score(y_test, y_pred_xgb, average="weighted", zero_division=0)
+    f1_weighted_xgb = f1_score(y_test, y_pred_xgb, average="weighted", zero_division=0)
+
+    precision_micro_xgb = precision_score(y_test, y_pred_xgb, average='micro', zero_division=0)
+    recall_micro_xgb = recall_score(y_test, y_pred_xgb, average='micro', zero_division=0)
+    f1_micro_xgb = f1_score(y_test, y_pred_xgb, average='micro', zero_division=0)
+
+    resumen = pd.DataFrame([
+        {
+            'Modelo': 'XGBoost',
+            'Accuracy': xgb_accuracy,
+            'Precision_macro': precision_macro_xgb,
+            'Recall_macro': recall_macro_xgb,
+            'F1_macro': f1_macro_xgb,
+            'Precision_weighted': precision_weighted_xgb,
+            'Recall_weighted': recall_weighted_xgb,
+            'F1_weighted': f1_weighted_xgb,
+            'Precision_micro': precision_micro_xgb,
+            'Recall_micro': recall_micro_xgb,
+            'F1_micro': f1_micro_xgb,
+        },
+        {
+            'Modelo': 'Red Neuronal MLP',
+            'Accuracy': accuracy_mlp,
+            'Precision_macro': precision_macro_mlp,
+            'Recall_macro': recall_macro_mlp,
+            'F1_macro': f1_macro_mlp,
+            'Precision_weighted': precision_weighted_mlp,
+            'Recall_weighted': recall_weighted_mlp,
+            'F1_weighted': f1_weighted_mlp,
+            'Precision_micro': precision_micro_mlp,
+            'Recall_micro': recall_micro_mlp,
+            'F1_micro': f1_micro_mlp,
+        }
+    ])
+    resumen.to_csv('metricas_modelos.csv', index=False)
+    print('✓ Resumen de métricas guardado en: metricas_modelos.csv')
 
     print("\n" + "=" * 70)
     print("PASO 7: TABLAS DE ACIERTOS Y ERRORES")
@@ -322,13 +556,16 @@ def train_mlp(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected
     print("✓ ANÁLISIS COMPLETADO EXITOSAMENTE")
     print("=" * 70)
     winner_name, winner_score = max({"XGBoost": xgb_accuracy, "Red Neuronal MLP": accuracy_mlp}.items(), key=lambda item: item[1])
-    print(f"\n📊 GANADOR: {winner_name} con {winner_score:.4f} accuracy")
-    print("\n📁 ARCHIVOS GENERADOS:")
+    print(f"\n GANADOR: {winner_name} con {winner_score:.4f} accuracy")
+    print("\n ARCHIVOS GENERADOS:")
     print("  • rfecv_selection_mlp.png")
     print("  • comparison_mlp.png")
-    print("  • pca_interactivo_modelos.html (NUEVO - Se abre en tu Chrome/Edge)")
+    print("  • pca_interactivo_modelos.html (Se abre en tu navegador)")
     print("  • tabla_errores_xgboost.csv")
     print("  • tabla_errores_mlp.csv")
+    print("  • estadisticas_errores_xgboost.csv (NUEVO - Detalles de errores por clase)")
+    print("  • estadisticas_errores_mlp.csv (NUEVO - Detalles de errores por clase)")
+    print("  • estadisticas_errores_comparativo.csv (NUEVO - Comparativa de ambos modelos)")
 
 
 def train_cnn(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected: np.ndarray, y_test: np.ndarray, xgb_accuracy: float, y_pred_xgb: np.ndarray) -> None:
@@ -336,21 +573,18 @@ def train_cnn(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected
     pass
 
 def main() -> None:
-    mode = sys.argv[1].lower() if len(sys.argv) > 1 else "mlp"
-    if mode not in {"mlp", "cnn"}:
-        raise SystemExit("Modo inválido. Usa: mlp o cnn")
-
     X, y = load_dataset()
     _, _, y_train, y_test, X_train_scaled, X_test_scaled = split_and_scale(X, y)
-    _, X_train_selected, X_test_selected, xgb_accuracy, y_pred_xgb = run_rfecv_xgb(
-        X_train_scaled, y_train, X_test_scaled, y_test, mode
+
+    _, X_train_selected_xgb, X_test_selected_xgb, xgb_accuracy, y_pred_xgb = run_rfecv_xgb(
+        X_train_scaled, y_train, X_test_scaled, y_test, "comparison"
     )
 
-    if mode == "mlp":
-        train_mlp(X_train_selected, y_train, X_test_selected, y_test, xgb_accuracy, y_pred_xgb)
-    else:
-        # Aquí llamarías a train_cnn si es necesario
-        pass
+    _, X_train_selected_mlp, X_test_selected_mlp = run_rfecv_mlp(
+        X_train_scaled, y_train, X_test_scaled, y_test, "comparison"
+    )
+
+    train_mlp(X_train_selected_mlp, y_train, X_test_selected_mlp, y_test, xgb_accuracy, y_pred_xgb)
 
 if __name__ == "__main__":
     main()

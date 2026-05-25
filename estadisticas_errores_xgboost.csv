@@ -1,0 +1,5 @@
+Modelo,Clase,Muestras,Aciertos,Errores,Tasa_Error_%
+XGBoost,Healthy,400,397,3,0.75
+XGBoost,Generalized,400,388,12,3.0
+XGBoost,Focal,400,380,20,5.0
+XGBoost,Seizure,400,376,24,6.0

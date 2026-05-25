@@ -1,14 +1,9 @@
-r"""
-RFECV + XGBoost + modelo neuronal seleccionable.
+"""
+RFECV independiente para XGBoost y MLP.
 
 Uso:
-  .venv\Scripts\python.exe RFECV.py mlp
-  .venv\Scripts\python.exe RFECV.py cnn
-
-Modo por defecto: mlp
+    .venv\Scripts\python.exe RFECV.py
 """
-
-from __future__ import annotations
 
 import sys
 import warnings
@@ -150,6 +145,53 @@ def run_rfecv_xgb(X_train_scaled: np.ndarray, y_train: np.ndarray, X_test_scaled
     return selected_mask, X_train_selected, X_test_selected, accuracy_xgb, y_pred_xgb
 
 
+def run_rfecv_mlp(X_train_scaled: np.ndarray, y_train: np.ndarray, X_test_scaled: np.ndarray, y_test: np.ndarray, output_prefix: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    print("=" * 70)
+    print("PASO 4: RFECV - SELECCIONAR CARACTERÍSTICAS CON MLP")
+    print("=" * 70)
+    print("Ejecutando RFECV para MLP (puede tomar varios minutos)...\n")
+
+    def mlp_importance_getter(estimator: MLPClassifier) -> np.ndarray:
+        return np.mean(np.abs(estimator.coefs_[0]), axis=1)
+
+    estimator = MLPClassifier(
+        hidden_layer_sizes=(128, 64),
+        activation="relu",
+        solver="adam",
+        alpha=0.0001,
+        batch_size=32,
+        learning_rate_init=0.001,
+        max_iter=300,
+        random_state=42,
+        verbose=False,
+    )
+
+    rfecv = RFECV(
+        estimator=estimator,
+        step=1,
+        cv=StratifiedKFold(5, shuffle=True, random_state=42),
+        scoring="accuracy",
+        n_jobs=-1,
+        verbose=1,
+        importance_getter=mlp_importance_getter,
+    )
+    rfecv.fit(X_train_scaled, y_train)
+
+    selected_mask = rfecv.support_
+    selected_features = [FEATURE_NAMES[i] for i, selected in enumerate(selected_mask) if selected]
+
+    print(f"\n✓ Características seleccionadas para MLP: {len(selected_features)}/{len(FEATURE_NAMES)}")
+    print(f"  Características: {selected_features}")
+    print(f"  Ranking RFECV: {rfecv.ranking_}\n")
+
+    plot_rfecv(rfecv, f"rfecv_selection_mlp_{output_prefix}.png")
+
+    X_train_selected = X_train_scaled[:, selected_mask]
+    X_test_selected = X_test_scaled[:, selected_mask]
+
+    return selected_mask, X_train_selected, X_test_selected
+
+
 def train_mlp(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected: np.ndarray, y_test: np.ndarray, xgb_accuracy: float, y_pred_xgb: np.ndarray) -> None:
     print("=" * 70)
     print("PASO 5: ENTRENAR RED NEURONAL (MLP)")
@@ -221,8 +263,8 @@ def train_mlp(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected
     print("✓ ANÁLISIS COMPLETADO EXITOSAMENTE")
     print("=" * 70)
     winner_name, winner_score = max({"XGBoost": xgb_accuracy, "Red Neuronal MLP": accuracy_mlp}.items(), key=lambda item: item[1])
-    print(f"\n📊 GANADOR: {winner_name} con {winner_score:.4f} accuracy")
-    print("\n📁 ARCHIVOS GENERADOS:")
+    print(f"\n GANADOR: {winner_name} con {winner_score:.4f} accuracy")
+    print("\n  ARCHIVOS GENERADOS:")
     print("  • rfecv_selection_mlp.png")
     print("  • comparison_mlp.png")
 
@@ -435,28 +477,26 @@ def train_cnn(X_train_selected: np.ndarray, y_train: np.ndarray, X_test_selected
     print("✓ ANÁLISIS COMPLETADO EXITOSAMENTE")
     print("=" * 70)
     winner_name, winner_score = max({"XGBoost": xgb_accuracy, "CNN 1D": accuracy_cnn}.items(), key=lambda item: item[1])
-    print(f"\n📊 GANADOR: {winner_name} con {winner_score:.4f} accuracy")
-    print("\n📁 ARCHIVOS GENERADOS:")
+    print(f"\n GANADOR: {winner_name} con {winner_score:.4f} accuracy")
+    print("\n  ARCHIVOS GENERADOS:")
     print("  • rfecv_selection_cnn.png")
     print("  • comparison_cnn.png")
     print("  • cnn_training_history.png")
 
 
 def main() -> None:
-    mode = sys.argv[1].lower() if len(sys.argv) > 1 else "mlp"
-    if mode not in {"mlp", "cnn"}:
-        raise SystemExit("Modo inválido. Usa: mlp o cnn")
-
     X, y = load_dataset()
     _, _, y_train, y_test, X_train_scaled, X_test_scaled = split_and_scale(X, y)
-    _, X_train_selected, X_test_selected, xgb_accuracy, y_pred_xgb = run_rfecv_xgb(
-        X_train_scaled, y_train, X_test_scaled, y_test, mode
+
+    _, X_train_selected_xgb, X_test_selected_xgb, xgb_accuracy, y_pred_xgb = run_rfecv_xgb(
+        X_train_scaled, y_train, X_test_scaled, y_test, "comparison"
     )
 
-    if mode == "mlp":
-        train_mlp(X_train_selected, y_train, X_test_selected, y_test, xgb_accuracy, y_pred_xgb)
-    else:
-        train_cnn(X_train_selected, y_train, X_test_selected, y_test, xgb_accuracy, y_pred_xgb)
+    _, X_train_selected_mlp, X_test_selected_mlp = run_rfecv_mlp(
+        X_train_scaled, y_train, X_test_scaled, y_test, "comparison"
+    )
+
+    train_mlp(X_train_selected_mlp, y_train, X_test_selected_mlp, y_test, xgb_accuracy, y_pred_xgb)
 
 
 if __name__ == "__main__":
